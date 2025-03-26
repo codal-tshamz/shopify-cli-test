@@ -1,0 +1,192 @@
+name: Create Production Release (US & CAN)
+on:
+  push:
+    branches:
+      - main
+      - canada-master
+
+jobs:
+  create_tag:
+    runs-on: ubuntu-latest
+    outputs:
+      output1: ${{ steps.previous_tag.outputs.tag_version }}
+      output2: ${{ steps.tag.outputs.tag_version }}
+      release_name: ${{ steps.previous_tag.outputs.release_name }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.github_token }}
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{github.repository}}.wiki
+
+      - name: generate the version number
+        id: previous_tag
+        run: |
+            ls -al
+
+            if [[ $GITHUB_REF_NAME == "canada-master" ]]; then
+              var=$(cat Home.textile | grep CANADAPROD | cut -d":" -f2 )
+              echo "::set-output name=release_name::CanadaProduction"
+            else
+              var=$(cat Home.textile | grep PRODUCTION | cut -d":" -f2 )
+              echo "::set-output name=release_name::Production"
+            fi
+
+            echo $var
+            echo "::set-output name=tag_version::$(echo ${var})"
+
+      - name: get pull-request-label
+        id: manual
+        uses: actions-ecosystem/action-get-merged-pull-request@v1.0.1
+        with:
+          github_token: ${{ secrets.github_token }}
+
+      - name: debug tag
+        shell: bash
+        run: |
+           echo "${{ steps.previous_tag.outputs.tag_version }}"
+
+      - name: create tag name
+        id: tag
+        shell: bash
+        run: |
+            echo "${{ steps.manual.outputs.labels }}"
+            # tag=$(git describe --tags --abbrev=0 | sed 's/v//')
+            version="${{ steps.manual.outputs.labels }}"
+            echo "${{ steps.tag.outputs.tag_version }}"
+            tag=$(echo ${{ steps.previous_tag.outputs.tag_version }} | sed 's/v//')
+            IFS='.' read -r -a tag_array <<< "$tag"
+
+            if [[ "${version}"  == "minor" ]]
+            then
+              temp=${tag_array[1]}
+              ((temp=temp+1))
+              echo "${temp}"
+              null_value=0
+              newTag="v${tag_array[0]}.${temp}.${null_value}"
+              echo "latest-tag=v${tag_array[0]}.${temp}.${null_value}"  >> $GITHUB_ENV
+              echo "::set-output name=tag_version::$(echo ${newTag})"
+            elif [[ "${version}" == "major" ]]
+            then
+              temp=${tag_array[0]}
+              ((temp=temp+1))
+              echo "${temp}"
+              newTag="v${temp}.${tag_array[1]}.${tag_array[2]}"
+              echo "latest-tag=v${temp}.${tag_array[1]}.${tag_array[2]}" >> $GITHUB_ENV
+              echo "::set-output name=tag_version::$(echo ${newTag})"
+            else
+              temp=${tag_array[2]}
+              ((temp=temp+1))
+              echo "${temp}"
+              newTag="v${tag_array[0]}.${tag_array[1]}.${temp}"
+
+              echo "latest-tag=v${tag_array[0]}.${tag_array[1]}.${temp}" >> $GITHUB_ENV
+              echo "::set-output name=tag_version::$(echo ${newTag})"
+            fi
+
+            echo "New Tag: ${newTag}"
+
+  create_release:
+    needs: create_tag
+    runs-on: ubuntu-latest
+    outputs:
+      output1: ${{needs.create_tag.outputs.output2}}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@master
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: ${{needs.create_tag.outputs.output2}}
+          release_name: ${{needs.create_tag.outputs.release_name}}-${{needs.create_tag.outputs.output2}}
+          draft: false
+          prerelease: false
+
+  push-version-wiki:
+    runs-on: ubuntu-latest
+    needs: create_release
+    env:
+      GITHUB_TOKEN: ${{ secrets.github_token }}
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{github.repository}}.wiki
+
+      - name: generate the version number
+        run: |
+            ls -al
+
+            if [[ $GITHUB_REF_NAME == "canada-master" ]]; then
+              var=$(cat Home.textile | grep CANADAPROD | cut -d":" -f2 )
+            else
+              var=$(cat Home.textile | grep PRODUCTION | cut -d":" -f2 )
+            fi
+
+            echo $var
+            sed -i -e "s/$var/\ ${{ needs.create_release.outputs.output1 }}/g" Home.textile
+            head -n 11 Home.textile > tmp.txt; mv tmp.txt Home.textile
+            cat Home.textile
+
+      - name: Commit files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "Add changes"
+          git push
+
+  create-pull-request_release:
+    runs-on: ubuntu-latest
+    needs: push-version-wiki
+    if: github.ref_name == 'main'
+    steps:
+      - name: check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: create a pull request on release branch
+        uses: devops-infra/action-pull-request@v0.4.2
+        with:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+          source_branch: main
+          target_branch: release
+          title: 'merging changes of US production back to US release branch'
+          body: "**Automated pull request**"
+          draft: false
+          old_string: "<!-- Add your description here -->"
+          new_string: "** Automatic pull request**"
+          get_diff: true
+          ignore_users: "dependabot"
+
+  create-pull-request_canada-release:
+    runs-on: ubuntu-latest
+    needs: push-version-wiki
+    if: github.ref_name == 'canada-master'
+    steps:
+      - name: check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: canada-master
+
+      - name: create a pull request on release branch
+        uses: devops-infra/action-pull-request@v0.4.2
+        with:
+          GITHUB_TOKEN: ${{ secrets.github_token }}
+          source_branch: canada-master
+          target_branch: canada-release
+          title: 'merging changes of canada production back to canada release branch'
+          body: "**Automated pull request**"
+          draft: false
+          old_string: "<!-- Add your description here -->"
+          new_string: "** Automatic pull request**"
+          get_diff: true
+          ignore_users: "dependabot"
