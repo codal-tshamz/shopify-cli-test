@@ -1,12 +1,15 @@
 name: Create Production Release (US & CAN)
 on:
-  push:
+  pull_request:
+    types:
+      - closed
     branches:
       - main
       - canada-master
 
 jobs:
   create_tag:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     outputs:
       output1: ${{ steps.previous_tag.outputs.tag_version }}
@@ -25,7 +28,7 @@ jobs:
         run: |
             ls -al
 
-            if [[ $GITHUB_REF_NAME == "canada-master" ]]; then
+            if [[ $GITHUB_BASE_REF == "canada-master" ]]; then
               var=$(cat Home.textile | grep CANADAPROD | cut -d":" -f2 )
               echo "::set-output name=release_name::CanadaProduction"
             else
@@ -88,6 +91,7 @@ jobs:
             echo "New Tag: ${newTag}"
 
   create_release:
+    if: github.event.pull_request.merged == true
     needs: create_tag
     runs-on: ubuntu-latest
     outputs:
@@ -108,6 +112,7 @@ jobs:
           prerelease: false
 
   push-version-wiki:
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     needs: create_release
     env:
@@ -122,7 +127,7 @@ jobs:
         run: |
             ls -al
 
-            if [[ $GITHUB_REF_NAME == "canada-master" ]]; then
+            if [[ $GITHUB_BASE_REF == "canada-master" ]]; then
               var=$(cat Home.textile | grep CANADAPROD | cut -d":" -f2 )
             else
               var=$(cat Home.textile | grep PRODUCTION | cut -d":" -f2 )
@@ -142,9 +147,9 @@ jobs:
           git push
 
   create-pull-request_release:
+    if: github.event.pull_request.merged == true && github.base_ref == 'main'
     runs-on: ubuntu-latest
     needs: push-version-wiki
-    if: github.ref_name == 'main'
     steps:
       - name: check out code
         uses: actions/checkout@v4
@@ -167,9 +172,9 @@ jobs:
           ignore_users: "dependabot"
 
   create-pull-request_canada-release:
+    if: github.event.pull_request.merged == true && github.base_ref == 'canada-master'
     runs-on: ubuntu-latest
     needs: push-version-wiki
-    if: github.ref_name == 'canada-master'
     steps:
       - name: check out code
         uses: actions/checkout@v4
